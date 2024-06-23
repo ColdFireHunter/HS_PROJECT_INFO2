@@ -21,6 +21,9 @@ buzzer.add_song("ALARM", sounds.alarm_sound)
 print(com.get_mac())
 
 
+#There is a bug with the if __name__ == "__main__" check while using ESPNOW (Crash with OSError) so we didn't use it in any file
+#I reported the bug to the development team of micropython
+
 while True:
     if com.check_received():
         try:

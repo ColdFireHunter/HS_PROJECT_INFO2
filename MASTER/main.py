@@ -13,6 +13,9 @@ espcom_timer = Timer(0)
 send_timer = Timer(1)
 button_timer = Timer(2)
 
+#There is a bug with the if __name__ == "__main__" check while using ESPNOW (Crash with OSError) so we didn't use it in any file
+#I reported the bug to the development team of micropython
+
 
 def communicate_with_esp_pc(t):
     if com.check_received():
