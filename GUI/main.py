@@ -5,10 +5,16 @@ from datetime import datetime
 import json
 import os
 import random
+import serial
+import serial.tools.list_ports
+import time
+import threading
 
 class DisplayApp:
     def __init__(self, root):
         self.root = root
+        self.serial_port = None
+        self.connected = 0
         self.root.title("Lamp Display")
 
         # Path to save lamp data
@@ -33,8 +39,7 @@ class DisplayApp:
         # Create slider
         self.slider_widget()
 
-        # Check connections to lamps on startup
-        self.check_lamp_connections()
+        self.root.after(25,self.read_serial_data)
 
     def slider_widget(self):
         
@@ -55,7 +60,7 @@ class DisplayApp:
         white_frame = tk.Frame(self.root)
         white_frame.pack(anchor="w", padx=20, pady=5)
    
-       # Create Label for slider 
+        # Create Label for slider 
         self.slider_label_W = tk.Label(white_frame, text="White-Slider:")
         self.slider_label_W.pack(side=tk.LEFT)
 
@@ -64,24 +69,31 @@ class DisplayApp:
         self.slider_w = ttk.Scale(white_frame, from_=0, to=100, orient="horizontal", variable=self.current_value_w, command=self.slider_changed)
         self.slider_w.pack(side=tk.LEFT, padx=10)
 
-
     def slider_changed(self, event):
         # Update or print slider values as needed
         print("UV Slider value:", self.slider_uv.get())
         print("White Slider value:", self.slider_w.get())
-    
+
+    def ident_lamp(self):
+        if self.current_lamp is not None:
+            lamp_name = self.lamp_data[self.current_lamp]["name"]
+            print(f"Identifying lamp: {lamp_name}")
+            messagebox.showinfo("Lamp Identification", f"Identifying lamp: {lamp_name}")
+            # Implement the actual identification logic here, such as flashing the lamp
+        else:
+            messagebox.showwarning("No Lamp Selected", "Please select a lamp first.")
+
     def create_widgets(self):
         # Create menu with sub menu
         menubar = tk.Menu(self.root)
-        self.root.config(menu=menubar)
         
         # Create Submenu for settings
         settings_menu = tk.Menu(menubar, tearoff=0)
         menubar.add_cascade(label="Settings", menu=settings_menu)
-        
         settings_menu.add_command(label="Search Lamp", command=self.search_lamps)
         settings_menu.add_command(label="Remove Lamp", command=self.remove_lamp)
-        settings_menu.add_command(label="Change Icon", command=self.change_icon)
+        #settings_menu.add_command(label="Change Icon", command=self.change_icon)
+        settings_menu.add_command(label="Ident Lamp", command=self.ident_lamp)
         
         # Create Submenu for mode
         mode_menu = tk.Menu(menubar, tearoff=0)
@@ -89,6 +101,19 @@ class DisplayApp:
         mode_menu.add_command(label="Party Mode", command=self.party_mode)
         mode_menu.add_command(label="Normal Mode", command=self.normal_mode)
         mode_menu.add_command(label="Alert", command=self.alert_mode)
+        
+        self.port_menu = tk.Menu(menubar, tearoff=0)
+        self.port_menu.add_command(label="Refresh Ports", command=self.refresh_ports)
+        menubar.add_cascade(label="Serial Ports", menu=self.port_menu)
+
+        self.refresh_ports()
+
+        connect_menu = tk.Menu(menubar, tearoff=0)
+        connect_menu.add_command(label="Connect", command=self.connect)
+        connect_menu.add_command(label="Disconnect", command=self.disconnect)
+        menubar.add_cascade(label="Connection", menu=connect_menu)
+        
+        self.root.config(menu=menubar)
         
         # Create lamp buttons
         self.button_frame = tk.Frame(self.root)
@@ -172,6 +197,7 @@ class DisplayApp:
         self.save_lamp_data()
 
     def find_new_lamps(self):
+        
         # Placeholder for the actual WLAN search logic
         # This should return a list of new lamp IDs found via WLAN
         return [random.randint(100, 999)]  # Example of a new lamp ID
@@ -241,7 +267,7 @@ class DisplayApp:
     def get_lamp_data(self, name):
         new_lamp_data = {
             "name": name,
-            "brightness": random.randint(0, 100),
+            "brightness": 0,
             "humidity": random.randint(0, 100),
             "temperature": random.randint(15, 30),
             "color": random.choice(["#FFFFFF", "#FFFF00", "#0000FF", "#FF0000", "#00FF00"])
@@ -307,8 +333,129 @@ class DisplayApp:
             with open(icon_path, 'r') as f:
                 data = json.load(f)
                 self.icon_file = data.get("icon_file")
+                
+    def refresh_ports(self):
+        self.port_menu.delete(2, tk.END)  # Remove previous ports
+        self.available_ports = list(serial.tools.list_ports.comports())
+        if not self.available_ports:
+            self.port_menu.add_command(label="No ports available")
+        else:
+            for port in self.available_ports:
+                self.port_menu.add_command(label=port.device, command=lambda p=port.device: self.select_port(p))
+
+        self.selected_port = None
+
+    def select_port(self, port):
+        self.selected_port = port
+        messagebox.showinfo("Port Selected", f"Selected port: {self.selected_port}")
+
+    def connect(self):
+        if self.selected_port:
+            try:
+                self.serial_port = serial.Serial(self.selected_port, baudrate=115200, timeout=1)
+                self.connected = 1
+                messagebox.showinfo("Connection", f"Connected to {self.selected_port}")
+                time.sleep(1)
+                print(self.send_serial_data("#SRCH@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@010#"))
+            except serial.SerialException as e:
+                messagebox.showerror("Connection Error", f"Failed to connect: {str(e)}")
+        else:
+            messagebox.showwarning("No Port Selected", "Please select a port first")
+
+    def disconnect(self):
+        if self.serial_port and self.serial_port.is_open:
+            self.connected = 0
+            self.serial_port.close()
+            messagebox.showinfo("Disconnection", "Disconnected successfully")
+        else:
+            messagebox.showwarning("No Connection", "No active connection to disconnect")
+    
+    def read_serial_data(self):
+        """
+        Reads 41 bytes from a serial port if available and converts them to a string.
+
+        :param ser: The serial.Serial object for the connected serial port
+        :return: The read data as a string if 41 bytes are available, otherwise an empty string
+        """
+        if self.connected == 1:
+            try:
+                if self.serial_port.in_waiting >= 41:
+                    data = self.serial_port.read(41)
+                    message = data.decode('utf-8', errors='replace')
+                    command, payload = self.decode_string(message)
+                    print(f"Command: {command}, Payload: {payload}")
+                    self.root.after(25,self.read_serial_data)
+                    return
+                else:
+                    self.root.after(25,self.read_serial_data)
+                    return
+            except serial.SerialException as e:
+                print(f"Serial exception: {e}")
+                self.root.after(25,self.read_serial_data)
+                return
+            except Exception as e:
+                print(f"General exception: {e}")
+                self.root.after(25,self.read_serial_data)
+                return
+        else:
+            self.root.after(25,self.read_serial_data)
+            
+    
+    def send_serial_data(self, data):
+        """
+        Sends a 41-letter string to a device through a serial port.
+        
+        :param data: The 41-letter string to be sent
+        :return: Number of bytes written
+        """
+        if self.connected == 1: 
+            if len(data) != 41:
+                raise ValueError("Data must be exactly 41 characters long.")
+            
+            try:
+                bytes_written = self.serial_port.write(data.encode('utf-8'))
+                return bytes_written
+            except serial.SerialException as e:
+                print(f"Serial exception: {e}")
+                return 0
+            except Exception as e:
+                print(f"General exception: {e}")
+                return 0
+            
+    def decode_string(self,encoded_str):
+        # Strip the '*' characters
+        stripped_str = encoded_str.strip('*')
+
+        # Check if the input length is valid
+        if len(stripped_str) < 7:
+            raise ValueError("Invalid input string length")
+
+        # Extract the checksum
+        checksum = stripped_str[-3:]
+        stripped_str = stripped_str[:-3]
+
+        # Calculate the checksum
+        calculated_checksum = 0
+        for char in stripped_str:
+            calculated_checksum ^= ord(char)
+
+        # Convert calculated checksum to decimal and compare
+        if format(calculated_checksum, '03d') != checksum:
+            raise ValueError("Checksum does not match")
+
+        # Remove '@' characters
+        stripped_str = stripped_str.replace('@', '')
+
+        # Extract the command and payload
+        command = stripped_str[:4]
+        payload = stripped_str[4:]
+
+        return command, payload
+    
+        
 
 if __name__ == "__main__":
     root = tk.Tk()
+    root.geometry('300x300')
     app = DisplayApp(root)
     root.mainloop()
