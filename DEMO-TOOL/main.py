@@ -335,3 +335,4 @@ if __name__ == "__main__":
     manager.select_serial_port()
     if manager.serial_conn:
         manager.main_menu()
+
